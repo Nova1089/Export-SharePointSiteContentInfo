@@ -98,6 +98,28 @@ function Test-ConnectedToMgGraph
     return $null -ne (Get-MgContext)
 }
 
+function Prompt-YesOrNo($question)
+{
+    Write-Host "$question`n[Y] Yes  [N] No"
+
+    do
+    {
+        $response = Read-Host
+        $validResponse = $response -imatch '^\s*[yn]\s*$' # regex matches y or n but allows spaces
+        if (-not($validResponse)) 
+        {
+            Write-Warning "Please enter y or n."
+        }
+    }
+    while (-not($validResponse))
+
+    if ($response -imatch '^\s*y\s*$') # regex matches a y but allows spaces
+    {
+        return $true
+    }
+    return $false
+}
+
 function PromptFor-Site
 {
     do
@@ -202,7 +224,7 @@ function Get-ItemsInDrive($drive)
 function Get-ItemsRecursively($uri, $items)
 {
     # For debugging
-    if ($items.Count -gt 100)
+    if ($items.Count -gt 25)
     {
         Write-Host "Reached $($items.Count) items!" -ForegroundColor DarkMagenta
         return Write-Output -NoEnumerate $items
@@ -231,7 +253,11 @@ function Get-ItemsRecursively($uri, $items)
         # For debugging
         Write-Host "Adding $($item.Name)" -ForegroundColor $infoColor
 
-        $items.Add((New-StandardizedObject $item))
+        if ($getVersionInfo)
+        {
+            $itemUri = ($uri -Replace 'items\/.+\/children', "items/$($item.Id)")
+        }
+        $items.Add((New-ItemRecord -Item $item -ItemUri $itemUri))
 
         $isFolder = Test-ItemIsFolder $item
         if ($isFolder)
@@ -263,7 +289,7 @@ function Test-ItemIsFile($item)
     return $item.ContainsKey("file")
 }
 
-function New-StandardizedObject($item)
+function New-ItemRecord($item, $itemUri)
 {
     $isFolder = Test-ItemIsFolder $item
     if ($isFolder)
@@ -276,20 +302,43 @@ function New-StandardizedObject($item)
     if ($isFile)
     {
         $type = "File"
+        if ($getVersionInfo)
+        {
+            # Uri is $baseUri/drives/$($drive.Id)/items/$($item.Id)/versions
+            $versions = Invoke-MgGraphRequest -Method "Get" -Uri "$itemUri/versions?`$select=size"
+            $versions = $versions.Value
+            $versionCount = $versions.Count
+            $versionsTotalSizeInBytes = Get-VersionsTotalSize $versions
+            $versionsTotalSizeFormatted = Format-FileSize $versionsTotalSizeInBytes            
+        }
     }
 
     return [PSCustomObject]@{
-        Name                 = $item.Name
-        ParentPath           = (Get-ReadablePath $item.ParentReference.Path)
-        Type                 = $type
-        CreatedBy            = $item.CreatedBy.User.DisplayName
-        CreatedDateTime      = $item.CreatedDateTime
-        Size                 = (Format-FileSize $item.Size)
-        ChildCount           = $childCount
-        LastModifiedBy       = $item.LastModifiedBy.User.DisplayName
-        LastModifiedDateTime = $item.LastModifiedDateTime
-        Url                  = $item.WebUrl
+        ParentPath               = (Get-ReadablePath $item.ParentReference.Path)
+        Name                     = $item.Name        
+        Type                     = $type
+        Size                     = (Format-FileSize $item.Size)
+        SizeInBytes              = $item.Size
+        VersionCount             = $versionCount
+        VersionsTotalSize        = $versionsTotalSizeFormatted
+        VersionsTotalSizeInBytes = $versionsTotalSizeInBytes
+        ChildCount               = $childCount
+        CreatedBy                = $item.CreatedBy.User.DisplayName
+        CreatedDateTime          = $item.CreatedDateTime
+        LastModifiedBy           = $item.LastModifiedBy.User.DisplayName
+        LastModifiedDateTime     = $item.LastModifiedDateTime
+        Url                      = $item.WebUrl
     }
+}
+
+function Get-VersionsTotalSize($versions)
+{
+    $totalSize = 0
+    foreach ($version in $versions)
+    {
+        $totalSize += $version.Size
+    }
+    return $totalSize
 }
 
 function Get-ReadablePath($path)
@@ -348,6 +397,7 @@ Initialize-ColorScheme
 Show-Introduction
 Use-Module "Microsoft.Graph.Authentication"
 TryConnect-MgGraph -Scopes "Sites.Read.All"
+$script:getVersionInfo = Prompt-YesOrNo "Would you like to get file version info? (Takes way longer as it must enumerate each version.)"
 Set-Variable -Name "baseUri" -Value "https://graph.microsoft.com/v1.0" -Scope "Script" -Option "Constant"
 $site = PromptFor-Site
 $drives = Get-SiteDrives $site.Id
