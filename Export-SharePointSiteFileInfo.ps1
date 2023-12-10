@@ -201,43 +201,25 @@ function Get-DriveLookup($drives)
     return $driveLookup
 }
 
-function Get-ItemsInAllDrives($drives)
+function Export-ItemsInAllDrives($drives, $exportPath)
 {
-    $items = New-Object System.Collections.Generic.List[object]
     foreach ($drive in $drives)
     {
-        $driveItems = Get-ItemsInDrive $drive
-        foreach ($item in $driveItems)
-        {
-            $items.Add($item)
-        }
+        Export-ItemsInDrive -Drive $drive -ExportPath $exportPath
     }
-    return Write-Output -NoEnumerate $items
+    Write-Host "Finished exporting to $exportPath" -ForegroundColor $successColor
 }
 
-function Get-ItemsInDrive($drive)
+function Export-ItemsInDrive($drive, $exportPath)
 {
-    $items = Get-ItemsRecursively -Uri "$baseUri/drives/$($drive.Id)/items/root/children"
-    return Write-Output -NoEnumerate $items
+    Export-ItemsRecursively -Uri "$baseUri/drives/$($drive.Id)/items/root/children" -ExportPath $exportPath
 }
 
-function Get-ItemsRecursively($uri, $items)
+function Export-ItemsRecursively($uri, $exportPath)
 {
-    # For debugging
-    if ($items.Count -gt 25)
-    {
-        Write-Host "Reached $($items.Count) items!" -ForegroundColor DarkMagenta
-        return Write-Output -NoEnumerate $items
-    }
-
-    if ($null -eq $items)
-    {
-        $items = New-Object System.Collections.Generic.List[object]
-    }
-
     # Uri is $baseUri/drives/$($drive.Id)/items/root/children or $baseUri/drives/{drive-id}/items/{item-id}/children
     $itemPage = Invoke-GraphRequest -Method "Get" -Uri $uri
-    if ($itemPage.Value.Count -eq 0) { return $null }
+    if ($itemPage.Value.Count -eq 0) { return }
 
     # For debugging
     if ($itemPage.Value.Count -ge 200)
@@ -251,13 +233,14 @@ function Get-ItemsRecursively($uri, $items)
     foreach ($item in $itemPage.Value)
     {
         # For debugging
-        Write-Host "Adding $($item.Name)" -ForegroundColor $infoColor
+        Write-Host "Exporting $($item.Name)" -ForegroundColor $infoColor
 
         if ($getVersionInfo)
         {
             $itemUri = ($uri -Replace 'items\/.+\/children', "items/$($item.Id)")
         }
-        $items.Add((New-ItemRecord -Item $item -ItemUri $itemUri))
+        $itemRecord = New-ItemRecord -Item $item -ItemUri $itemUri
+        $itemRecord | Export-CSV -Path $exportPath -Append -NoTypeInformation
 
         $isFolder = Test-ItemIsFolder $item
         if ($isFolder)
@@ -266,17 +249,15 @@ function Get-ItemsRecursively($uri, $items)
             $uri = ($uri -Replace 'items\/.+\/children', "items/$($item.Id)/children")
 
             # Uri is $baseUri/drives/$($drive.Id)/items/$($item.Id)/children
-            $items = Get-ItemsRecursively -Uri $uri -Items $items
+            Export-ItemsRecursively -Uri $uri -ExportPath $exportPath
         }
     }
 
     $nextLink = $itemPage."@odata.nextLink"
     if ($nextLink)
     {
-        $items = Get-ItemsRecursively -Uri $nextLink -Items $items
+        Export-ItemsRecursively -Uri $nextLink -ExportPath $exportPath
     }
-    # Tell Powershell not to unroll/enumerate the collection of items and simply return the collection.
-    return Write-Output -NoEnumerate $items
 }
 
 function Test-ItemIsFolder($item)
@@ -317,12 +298,12 @@ function New-ItemRecord($item, $itemUri)
         ParentPath               = (Get-ReadablePath $item.ParentReference.Path)
         Name                     = $item.Name        
         Type                     = $type
+        ChildCount               = $childCount
         Size                     = (Format-FileSize $item.Size)
         SizeInBytes              = $item.Size
         VersionCount             = $versionCount
         VersionsTotalSize        = $versionsTotalSizeFormatted
-        VersionsTotalSizeInBytes = $versionsTotalSizeInBytes
-        ChildCount               = $childCount
+        VersionsTotalSizeInBytes = $versionsTotalSizeInBytes        
         CreatedBy                = $item.CreatedBy.User.DisplayName
         CreatedDateTime          = $item.CreatedDateTime
         LastModifiedBy           = $item.LastModifiedBy.User.DisplayName
@@ -392,15 +373,20 @@ function Format-FileSize($sizeInBytes)
     return $formattedSize
 }
 
+function New-TimeStamp
+{
+    return (Get-Date -Format yyyy-MM-dd-hh-mmtt).ToString()
+}
+
 # main
 Initialize-ColorScheme
 Show-Introduction
 Use-Module "Microsoft.Graph.Authentication"
 TryConnect-MgGraph -Scopes "Sites.Read.All"
-$script:getVersionInfo = Prompt-YesOrNo "Would you like to get file version info? (Takes way longer as it must enumerate each version.)"
+Set-Variable -Name "getVersionInfo" -Value (Prompt-YesOrNo "Would you like to get file version info? (Takes way longer as it must enumerate each version.)") -Scope "Script" -Option "Constant"
 Set-Variable -Name "baseUri" -Value "https://graph.microsoft.com/v1.0" -Scope "Script" -Option "Constant"
 $site = PromptFor-Site
 $drives = Get-SiteDrives $site.Id
 Set-Variable -Name "driveLookup" -Value (Get-DriveLookup $drives) -Scope "Script" -Option "Constant"
-$items = Get-ItemsInAllDrives $drives
-$items | Out-GridView
+Export-ItemsInAllDrives -Drives $drives -ExportPath "$PSScriptRoot/SharePoint $($site.DisplayName) File Info $(New-TimeStamp).csv"
+Read-Host "Press Enter to exit"
