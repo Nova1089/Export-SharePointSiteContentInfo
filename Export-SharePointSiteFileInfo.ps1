@@ -128,7 +128,8 @@ function PromptFor-Site
         $formattedUrl = Format-URL $url # Get the format needed for the API call.
         try
         {
-            $site = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$formattedUrl/?`$select=Id,DisplayName"
+            # Uri is https://graph.microsoft.com/v1.0/sites/domain.sharepoint.com:/sites/siteName/?select=Id,DisplayName
+            $site = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$formattedUrl/?`$select=Id,DisplayName"            
         }
         catch
         {
@@ -160,11 +161,30 @@ function Format-URL($url)
     return $url # result is domain.sharepoint.com:/sites/siteName
 }
 
-function Get-SiteDrives($siteId)
+function New-MetaReport
+{
+    return [PSCustomObject]@{        
+        TotalStorageConsumed            = 0
+        StorageConsumedCurrentVersions  = 0
+        CountItems                      = 0
+        CountFolders                    = 0
+        CountFiles                      = 0        
+        CountDrives                     = 0
+        Drives                          = (New-Object System.Collections.Generic.List[object])
+        CountSubsites                   = 0
+        Subsites                        = (New-Object System.Collections.Generic.List[object])
+        CountLists                      = 0
+        Lists                           = (New-Object System.Collections.Generic.List[object])
+        CountNotebooks                  = 0
+        Notebooks                       = (New-Object System.Collections.Generic.List[object])
+    }
+}
+
+function Get-Drives($site)
 {
     try
     {
-        $drives = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$siteId/drives?`$select=Id,Name"
+        $drives = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$($site.Id)/drives?`$select=Id,Name,DriveType,Quota,WebUrl"
         $drives = $drives.Value
     }
     catch
@@ -177,15 +197,6 @@ function Get-SiteDrives($siteId)
     {
         Write-Host "Was unable to find any drives in this site. Exiting script." -ForegroundColor $failColor
         exit
-    }
-
-    # For debugging
-    Write-Host "Found site drives!" -ForegroundColor $successColor
-
-    # For debugging
-    foreach ($drive in $drives)
-    {
-        $drive | Out-Host
     }
 
     return $drives
@@ -240,6 +251,7 @@ function Export-ItemsRecursively($uri, $exportPath)
             $itemUri = ($uri -Replace 'items\/.+\/children', "items/$($item.Id)")
         }
         $itemRecord = New-ItemRecord -Item $item -ItemUri $itemUri
+        Update-MetaReportWithItem $itemRecord
         $itemRecord | Export-CSV -Path $exportPath -Append -NoTypeInformation
 
         $isFolder = Test-ItemIsFolder $item
@@ -275,14 +287,14 @@ function New-ItemRecord($item, $itemUri)
     $isFolder = Test-ItemIsFolder $item
     if ($isFolder)
     {
-        $type = "Folder"
+        $type = [ItemType]::Folder
         $childCount = $item.Folder.ChildCount
     }
 
     $isFile = Test-ItemIsFile $item
     if ($isFile)
     {
-        $type = "File"
+        $type = [ItemType]::File
         if ($getVersionInfo)
         {
             # Uri is $baseUri/drives/$($drive.Id)/items/$($item.Id)/versions
@@ -373,6 +385,86 @@ function Format-FileSize($sizeInBytes)
     return $formattedSize
 }
 
+function Update-MetaReportWithItem($itemRecord)
+{
+    $script:metaReport.CountItems++
+    $script:metaReport.StorageConsumedCurrentVersions += $itemRecord.SizeInBytes
+    if ($itemRecord.Type -eq [ItemType]::File)
+    {
+        $script:metaReport.CountFiles++
+        $script:metaReport.TotalStorageConsumed += $itemRecord.VersionsTotalSizeInBytes
+    }
+    elseif ($itemRecord.Type -eq [ItemType]::Folder)
+    {
+        $script:metaReport.CountFolders++
+        $script:metaReport.TotalStorageConsumed += $itemRecord.SizeInBytes
+    }    
+}
+
+function Get-Subsites($site)
+{
+    $subsites = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$($site.Id)/sites?`$select=Name,DisplayName,WebUrl"
+    return $subsites.Value
+}
+
+function Update-MetaReportWithSubsites($subsites)
+{
+    $script:metaReport.CountSubsites = $subsites.Count
+    foreach ($site in $subsites)
+    {
+        $script:metaReport.Subsites.Add($site)
+    }    
+}
+
+function Get-Lists($site)
+{
+    $lists = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$($site.Id)/lists?`$select=Name,DisplayName,Description,WebUrl,List"
+    return $lists.Value
+}
+
+function Update-MetaReportWithLists($lists)
+{
+    $script:metaReport.CountLists = $lists.Count
+    foreach ($list in $lists)
+    {
+        $script:metaReport.Lists.Add($list)
+    }
+}
+
+function Get-Notebooks($site)
+{
+    $notebooks = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$($site.Id)/onenote/notebooks?`$select=DisplayName,Links"
+    return $notebooks.Value
+}
+
+function Update-MetaReportWithNotebooks($notebooks)
+{
+    $script:metaReport.CountNotebooks = $notebooks.Count
+    foreach ($notebook in $notebooks)
+    {
+        $script:metaReport.Notebooks.Add($notebook)
+    }
+}
+
+function Update-MetaReportWithDrives($drives)
+{
+    $script:metaReport.CountDrives = $drives.Count
+    foreach ($drive in $drives)
+    {
+        $script:metaReport.Drives.Add($drive)
+    }       
+}
+
+function Show-MetaReport
+{
+    Write-Host "Meta Report: `n" -ForegroundColor $infoColor
+    $script:metaReport | Out-Host
+    $script:metaReport.Drives | Out-Host
+    $script:metaReport.Lists | Out-Host
+    $script:metaReport.Notebooks | Out-Host
+    $script:metaReport.Subsites | Out-Host
+}
+
 function New-TimeStamp
 {
     return (Get-Date -Format yyyy-MM-dd-hh-mmtt).ToString()
@@ -382,11 +474,26 @@ function New-TimeStamp
 Initialize-ColorScheme
 Show-Introduction
 Use-Module "Microsoft.Graph.Authentication"
-TryConnect-MgGraph -Scopes "Sites.Read.All"
-Set-Variable -Name "getVersionInfo" -Value (Prompt-YesOrNo "Would you like to get file version info? (Takes way longer as it must enumerate each version.)") -Scope "Script" -Option "Constant"
+TryConnect-MgGraph -Scopes "Sites.Read.All", "Notes.Read.All"
+Set-Variable -Name "getVersionInfo" -Value (Prompt-YesOrNo "Would you like to get file version info? (Takes much longer as it must enumerate each version.)") -Scope "Script" -Option "Constant"
 Set-Variable -Name "baseUri" -Value "https://graph.microsoft.com/v1.0" -Scope "Script" -Option "Constant"
 $site = PromptFor-Site
-$drives = Get-SiteDrives $site.Id
+
+enum ItemType
+{
+    File
+    Folder
+}
+
+$script:metaReport = New-MetaReport
+
+$drives = Get-Drives $site
 Set-Variable -Name "driveLookup" -Value (Get-DriveLookup $drives) -Scope "Script" -Option "Constant"
 Export-ItemsInAllDrives -Drives $drives -ExportPath "$PSScriptRoot/SharePoint $($site.DisplayName) File Info $(New-TimeStamp).csv"
+
+Update-MetaReportWithDrives $drives
+Update-MetaReportWithSubsites (Get-Subsites $site)
+Update-MetaReportWithLists (Get-Lists $site)
+Update-MetaReportWithNotebooks (Get-Notebooks $site)
+Show-MetaReport
 Read-Host "Press Enter to exit"
