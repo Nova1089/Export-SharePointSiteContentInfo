@@ -228,6 +228,8 @@ function Export-ItemsInDrive($drive, $exportPath)
 
 function Export-ItemsRecursively($uri, $exportPath)
 {
+    if ($script:itemCounter -ge 100) { return } # For debugging
+    
     # Uri is $baseUri/drives/$($drive.Id)/items/root/children or $baseUri/drives/{drive-id}/items/{item-id}/children
     $itemPage = Invoke-GraphRequest -Method "Get" -Uri $uri
     if ($itemPage.Value.Count -eq 0) { return }
@@ -243,6 +245,8 @@ function Export-ItemsRecursively($uri, $exportPath)
 
     foreach ($item in $itemPage.Value)
     {
+        if ($script:itemCounter -ge 100) { return } # For debugging
+        
         # For debugging
         Write-Host "Exporting $($item.Name)" -ForegroundColor $infoColor
 
@@ -284,6 +288,8 @@ function Test-ItemIsFile($item)
 
 function New-ItemRecord($item, $itemUri)
 {
+    $script:itemCounter++ # For debugging
+    
     $isFolder = Test-ItemIsFolder $item
     if ($isFolder)
     {
@@ -457,12 +463,71 @@ function Update-MetaReportWithDrives($drives)
 
 function Show-MetaReport
 {
-    Write-Host "Meta Report: `n" -ForegroundColor $infoColor
-    $script:metaReport | Out-Host
+    Show-Separator -Title "Meta-report"
+
+    $topSection = [PSCustomObject]@{
+        TotalStorageConsumed                     = (Format-FileSize $script:metaReport.TotalStorageConsumed)
+        "TotalStorageConsumed (Bytes)"           = $script:metaReport.TotalStorageConsumed
+        StorageConsumedCurrentVersions           = (Format-FileSize $script:metaReport.StorageConsumedCurrentVersions)
+        "StorageConsumedCurrentVersions (Bytes)" = $script:metaReport.StorageConsumedCurrentVersions        
+        PercentConsumedByCurrentVersions         = (Get-Percent -Divisor $script:metaReport.StorageConsumedCurrentVersions -Dividend $script:metaReport.TotalStorageConsumed)
+        CountDrives                              = $script:metaReport.CountDrives
+        CountItems                               = $script:metaReport.CountItems
+        CountFolders                             = $script:metaReport.CountFolders
+        CountFiles                               = $script:metaReport.CountFiles
+        CountSubsites                            = $script:metaReport.CountSubsites
+        CountLists                               = $script:metaReport.CountLists
+        CountNotebooks                           = $script:metaReport.CountNotebooks
+    }
+    $topSection | Out-Host
+
+    Show-Separator -Title "Drives"
     $script:metaReport.Drives | Out-Host
+
+    Show-Separator -Title "Lists"
     $script:metaReport.Lists | Out-Host
+
+    Show-Separator -Title "Notebooks"
     $script:metaReport.Notebooks | Out-Host
+
+    Show-Separator -Title "Subsites"
     $script:metaReport.Subsites | Out-Host
+}
+
+function Show-Separator($title, [ConsoleColor]$color = "DarkCyan", [switch]$noLineBreaks)
+{
+    if ($title)
+    {
+        $separator = " $title "
+    }
+    else
+    {
+        $separator = ""
+    }
+
+    # Truncate if it's too long.
+    If (($separator.length - 6) -gt ((Get-host).UI.RawUI.BufferSize.Width))
+    {
+        $separator = $separator.Remove((Get-host).UI.RawUI.BufferSize.Width - 5)
+    }
+
+    # Pad with dashes.
+    $separator = "--$($separator.PadRight(((Get-host).UI.RawUI.BufferSize.Width)-3,"-"))"
+
+    if (-not($noLineBreaks))
+    {        
+        # Add line breaks.
+        $separator = "`n$separator`n"
+    }
+
+    Write-Host $separator -ForegroundColor $color
+}
+
+function Get-Percent($divisor, $dividend)
+{
+    $percent = $divisor / $dividend * 100
+    $roundedToInt = [Math]::Round($percent)
+    return "$roundedToInt%"
 }
 
 function New-TimeStamp
@@ -478,6 +543,8 @@ TryConnect-MgGraph -Scopes "Sites.Read.All", "Notes.Read.All"
 Set-Variable -Name "getVersionInfo" -Value (Prompt-YesOrNo "Would you like to get file version info? (Takes much longer as it must enumerate each version.)") -Scope "Script" -Option "Constant"
 Set-Variable -Name "baseUri" -Value "https://graph.microsoft.com/v1.0" -Scope "Script" -Option "Constant"
 $site = PromptFor-Site
+
+$script:itemCounter = 0 # For debugging
 
 enum ItemType
 {
@@ -496,4 +563,5 @@ Update-MetaReportWithSubsites (Get-Subsites $site)
 Update-MetaReportWithLists (Get-Lists $site)
 Update-MetaReportWithNotebooks (Get-Notebooks $site)
 Show-MetaReport
+
 Read-Host "Press Enter to exit"
