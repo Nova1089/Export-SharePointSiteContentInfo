@@ -228,15 +228,13 @@ function Export-ItemsRecursively($uri, $exportPath)
     {
         if ($script:itemCounter -ge 100) { return } # For debugging
         
-        # For debugging
-        Write-Host "Exporting $($item.Name)" -ForegroundColor $infoColor
-
-        if ($getVersionInfo)
+        if ($script:getVersionInfo)
         {
             $itemUri = ($uri -Replace 'items\/.+\/children', "items/$($item.Id)")
         }
-        $itemRecord = New-ItemRecord -Item $item -ItemUri $itemUri
+        $itemRecord = New-ItemRecord -Item $item -ItemUri $itemUri        
         $script:metaReport.AddItem($itemRecord)
+        Write-Progress -Activity "Exporting items..." -Status "$($script:metaReport.CountItems): $($itemRecord.ParentPath)/$($itemRecord.Name)"
         $itemRecord | Export-CSV -Path $exportPath -Append -NoTypeInformation
 
         $isFolder = Test-ItemIsFolder $item
@@ -282,7 +280,7 @@ function New-ItemRecord($item, $itemUri)
     if ($isFile)
     {
         $type = [ItemType]::File
-        if ($getVersionInfo)
+        if ($script:getVersionInfo)
         {
             # Uri is $baseUri/drives/$($drive.Id)/items/$($item.Id)/versions
             $versions = Invoke-MgGraphRequest -Method "Get" -Uri "$itemUri/versions?`$select=size"
@@ -477,6 +475,13 @@ class MetaReport
         $this.CountDrives += $drives.Count
         foreach ($drive in $drives)
         {
+            $drive = [PSCustomObject]@{
+                Name         = $drive.Name
+                DriveType    = $drive.DriveType
+                "Size"       = (Format-FileSize $drive.Quota.Used)
+                "QuotaTotal" = (Format-FileSize $drive.Quota.Total)     
+                URL          = $drive.WebUrl         
+            }
             $this.Drives.Add($drive)
         }  
     }
@@ -486,6 +491,13 @@ class MetaReport
         $this.CountLists += $lists.Count
         foreach ($list in $lists)
         {
+            $list = [PSCustomObject]@{
+                Name        = $list.Name
+                DisplayName = $list.DisplayName
+                Description = $list.Description
+                Hidden      = $list.List.Hidden
+                URL         = $list.WebUrl
+            }
             $this.Lists.Add($list)
         }
     }
@@ -495,6 +507,10 @@ class MetaReport
         $this.CountNotebooks += $notebooks.Count
         foreach ($notebook in $notebooks)
         {
+            $notebook = [PSCustomObject]@{
+                DisplayName = $notebook.DisplayName
+                URL         = $notebook.Links.OneNoteWebUrl.Href
+            }
             $this.Notebooks.Add($notebook)
         }
     }
@@ -504,6 +520,11 @@ class MetaReport
         $this.CountSubsites += $subsites.Count
         foreach ($site in $subsites)
         {
+            $site = [PSCustomObject]@{
+                Name        = $site.Name
+                DisplayName = $site.DisplayName
+                URL         = $site.WebUrl
+            }
             $this.Subsites.Add($site)
         }  
     }
@@ -512,19 +533,28 @@ class MetaReport
     {
         Show-Separator -Title "Meta-report"
 
+        if ($script:getVersionInfo)
+        {
+            $totalStorageOutput = Format-FileSize $this.TotalStorageConsumed
+            $percentOutput = Get-Percent -Divisor $this.StorageConsumedCurrentVersions -Dividend $this.TotalStorageConsumed
+        }
+        else
+        {
+            $totalStorageOutput = "Get version info when running script for accurate number."
+            $percentOutput = "Get version info when running script for accurate number."
+        }        
+
         $topSection = [PSCustomObject]@{
-            TotalStorageConsumed                     = (Format-FileSize $this.TotalStorageConsumed)
-            "TotalStorageConsumed (Bytes)"           = $this.TotalStorageConsumed
-            StorageConsumedCurrentVersions           = (Format-FileSize $this.StorageConsumedCurrentVersions)
-            "StorageConsumedCurrentVersions (Bytes)" = $this.StorageConsumedCurrentVersions        
-            PercentConsumedByCurrentVersions         = (Get-Percent -Divisor $this.StorageConsumedCurrentVersions -Dividend $this.TotalStorageConsumed)
+            TotalStorageConsumed                     = $totalStorageOutput
+            StorageConsumedCurrentVersions           = (Format-FileSize $this.StorageConsumedCurrentVersions)     
+            PercentConsumedByCurrentVersions         = $percentOutput
             CountDrives                              = $this.CountDrives
             CountItems                               = $this.CountItems
             CountFolders                             = $this.CountFolders
-            CountFiles                               = $this.CountFiles
-            CountSubsites                            = $this.CountSubsites
+            CountFiles                               = $this.CountFiles            
             CountLists                               = $this.CountLists
             CountNotebooks                           = $this.CountNotebooks
+            CountSubsites                            = $this.CountSubsites
         }
         $topSection | Out-Host
 
