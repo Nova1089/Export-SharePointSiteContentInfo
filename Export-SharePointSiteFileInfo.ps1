@@ -161,25 +161,6 @@ function Format-URL($url)
     return $url # result is domain.sharepoint.com:/sites/siteName
 }
 
-function New-MetaReport
-{
-    return [PSCustomObject]@{        
-        TotalStorageConsumed            = 0
-        StorageConsumedCurrentVersions  = 0
-        CountItems                      = 0
-        CountFolders                    = 0
-        CountFiles                      = 0        
-        CountDrives                     = 0
-        Drives                          = (New-Object System.Collections.Generic.List[object])
-        CountSubsites                   = 0
-        Subsites                        = (New-Object System.Collections.Generic.List[object])
-        CountLists                      = 0
-        Lists                           = (New-Object System.Collections.Generic.List[object])
-        CountNotebooks                  = 0
-        Notebooks                       = (New-Object System.Collections.Generic.List[object])
-    }
-}
-
 function Get-Drives($site)
 {
     try
@@ -255,7 +236,7 @@ function Export-ItemsRecursively($uri, $exportPath)
             $itemUri = ($uri -Replace 'items\/.+\/children', "items/$($item.Id)")
         }
         $itemRecord = New-ItemRecord -Item $item -ItemUri $itemUri
-        Update-MetaReportWithItem $itemRecord
+        $script:metaReport.AddItem($itemRecord)
         $itemRecord | Export-CSV -Path $exportPath -Append -NoTypeInformation
 
         $isFolder = Test-ItemIsFolder $item
@@ -391,50 +372,10 @@ function Format-FileSize($sizeInBytes)
     return $formattedSize
 }
 
-function Update-MetaReportWithItem($itemRecord)
-{
-    $script:metaReport.CountItems++
-    $script:metaReport.StorageConsumedCurrentVersions += $itemRecord.SizeInBytes
-    if ($itemRecord.Type -eq [ItemType]::File)
-    {
-        $script:metaReport.CountFiles++
-        $script:metaReport.TotalStorageConsumed += $itemRecord.VersionsTotalSizeInBytes
-    }
-    elseif ($itemRecord.Type -eq [ItemType]::Folder)
-    {
-        $script:metaReport.CountFolders++
-        $script:metaReport.TotalStorageConsumed += $itemRecord.SizeInBytes
-    }    
-}
-
-function Get-Subsites($site)
-{
-    $subsites = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$($site.Id)/sites?`$select=Name,DisplayName,WebUrl"
-    return $subsites.Value
-}
-
-function Update-MetaReportWithSubsites($subsites)
-{
-    $script:metaReport.CountSubsites = $subsites.Count
-    foreach ($site in $subsites)
-    {
-        $script:metaReport.Subsites.Add($site)
-    }    
-}
-
 function Get-Lists($site)
 {
     $lists = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$($site.Id)/lists?`$select=Name,DisplayName,Description,WebUrl,List"
     return $lists.Value
-}
-
-function Update-MetaReportWithLists($lists)
-{
-    $script:metaReport.CountLists = $lists.Count
-    foreach ($list in $lists)
-    {
-        $script:metaReport.Lists.Add($list)
-    }
 }
 
 function Get-Notebooks($site)
@@ -443,55 +384,10 @@ function Get-Notebooks($site)
     return $notebooks.Value
 }
 
-function Update-MetaReportWithNotebooks($notebooks)
+function Get-Subsites($site)
 {
-    $script:metaReport.CountNotebooks = $notebooks.Count
-    foreach ($notebook in $notebooks)
-    {
-        $script:metaReport.Notebooks.Add($notebook)
-    }
-}
-
-function Update-MetaReportWithDrives($drives)
-{
-    $script:metaReport.CountDrives = $drives.Count
-    foreach ($drive in $drives)
-    {
-        $script:metaReport.Drives.Add($drive)
-    }       
-}
-
-function Show-MetaReport
-{
-    Show-Separator -Title "Meta-report"
-
-    $topSection = [PSCustomObject]@{
-        TotalStorageConsumed                     = (Format-FileSize $script:metaReport.TotalStorageConsumed)
-        "TotalStorageConsumed (Bytes)"           = $script:metaReport.TotalStorageConsumed
-        StorageConsumedCurrentVersions           = (Format-FileSize $script:metaReport.StorageConsumedCurrentVersions)
-        "StorageConsumedCurrentVersions (Bytes)" = $script:metaReport.StorageConsumedCurrentVersions        
-        PercentConsumedByCurrentVersions         = (Get-Percent -Divisor $script:metaReport.StorageConsumedCurrentVersions -Dividend $script:metaReport.TotalStorageConsumed)
-        CountDrives                              = $script:metaReport.CountDrives
-        CountItems                               = $script:metaReport.CountItems
-        CountFolders                             = $script:metaReport.CountFolders
-        CountFiles                               = $script:metaReport.CountFiles
-        CountSubsites                            = $script:metaReport.CountSubsites
-        CountLists                               = $script:metaReport.CountLists
-        CountNotebooks                           = $script:metaReport.CountNotebooks
-    }
-    $topSection | Out-Host
-
-    Show-Separator -Title "Drives"
-    $script:metaReport.Drives | Out-Host
-
-    Show-Separator -Title "Lists"
-    $script:metaReport.Lists | Out-Host
-
-    Show-Separator -Title "Notebooks"
-    $script:metaReport.Notebooks | Out-Host
-
-    Show-Separator -Title "Subsites"
-    $script:metaReport.Subsites | Out-Host
+    $subsites = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$($site.Id)/sites?`$select=Name,DisplayName,WebUrl"
+    return $subsites.Value
 }
 
 function Show-Separator($title, [ConsoleColor]$color = "DarkCyan", [switch]$noLineBreaks)
@@ -523,6 +419,7 @@ function Show-Separator($title, [ConsoleColor]$color = "DarkCyan", [switch]$noLi
     Write-Host $separator -ForegroundColor $color
 }
 
+
 function Get-Percent($divisor, $dividend)
 {
     $percent = $divisor / $dividend * 100
@@ -535,6 +432,122 @@ function New-TimeStamp
     return (Get-Date -Format yyyy-MM-dd-hh-mmtt).ToString()
 }
 
+class MetaReport
+{
+    [Int64]$TotalStorageConsumed
+    [Int64]$StorageConsumedCurrentVersions
+    [Int]$CountItems
+    [Int]$CountFolders
+    [Int]$CountFiles
+    [Int]$CountDrives
+    [System.Collections.Generic.List[object]]$Drives
+    [Int]$CountLists
+    [System.Collections.Generic.List[object]]$Lists
+    [Int]$CountNotebooks
+    [System.Collections.Generic.List[object]]$Notebooks
+    [Int]$CountSubsites
+    [System.Collections.Generic.List[object]]$Subsites
+
+    MetaReport()
+    {
+        $this.Drives = New-Object System.Collections.Generic.List[object]        
+        $this.Lists = New-Object System.Collections.Generic.List[object]
+        $this.Notebooks = New-Object System.Collections.Generic.List[object]
+        $this.Subsites = New-Object System.Collections.Generic.List[object]
+    }
+    
+    AddItem($itemRecord)
+    {
+        $this.CountItems++
+        $this.StorageConsumedCurrentVersions += $itemRecord.SizeInBytes
+        if ($itemRecord.Type -eq [ItemType]::File)
+        {
+            $this.CountFiles++
+            $this.TotalStorageConsumed += $itemRecord.VersionsTotalSizeInBytes
+        }
+        elseif ($itemRecord.Type -eq [ItemType]::Folder)
+        {
+            $this.CountFolders++
+            $this.TotalStorageConsumed += $itemRecord.SizeInBytes
+        }
+    }
+
+    AddDrives($drives)
+    {
+        $this.CountDrives += $drives.Count
+        foreach ($drive in $drives)
+        {
+            $this.Drives.Add($drive)
+        }  
+    }
+
+    AddLists($lists)
+    {
+        $this.CountLists += $lists.Count
+        foreach ($list in $lists)
+        {
+            $this.Lists.Add($list)
+        }
+    }
+
+    AddNotebooks($notebooks)
+    {
+        $this.CountNotebooks += $notebooks.Count
+        foreach ($notebook in $notebooks)
+        {
+            $this.Notebooks.Add($notebook)
+        }
+    }
+
+    AddSubSites($subsites)
+    {
+        $this.CountSubsites += $subsites.Count
+        foreach ($site in $subsites)
+        {
+            $this.Subsites.Add($site)
+        }  
+    }
+
+    Show()
+    {
+        Show-Separator -Title "Meta-report"
+
+        $topSection = [PSCustomObject]@{
+            TotalStorageConsumed                     = (Format-FileSize $this.TotalStorageConsumed)
+            "TotalStorageConsumed (Bytes)"           = $this.TotalStorageConsumed
+            StorageConsumedCurrentVersions           = (Format-FileSize $this.StorageConsumedCurrentVersions)
+            "StorageConsumedCurrentVersions (Bytes)" = $this.StorageConsumedCurrentVersions        
+            PercentConsumedByCurrentVersions         = (Get-Percent -Divisor $this.StorageConsumedCurrentVersions -Dividend $this.TotalStorageConsumed)
+            CountDrives                              = $this.CountDrives
+            CountItems                               = $this.CountItems
+            CountFolders                             = $this.CountFolders
+            CountFiles                               = $this.CountFiles
+            CountSubsites                            = $this.CountSubsites
+            CountLists                               = $this.CountLists
+            CountNotebooks                           = $this.CountNotebooks
+        }
+        $topSection | Out-Host
+
+        Show-Separator -Title "Drives"
+        $this.Drives | Out-Host
+
+        Show-Separator -Title "Lists"
+        $this.Lists | Out-Host
+
+        Show-Separator -Title "Notebooks"
+        $this.Notebooks | Out-Host
+
+        Show-Separator -Title "Subsites"
+        $this.Subsites | Out-Host
+    }
+}
+
+enum ItemType
+{
+    File
+    Folder
+}
+
 # main
 Initialize-ColorScheme
 Show-Introduction
@@ -545,23 +558,16 @@ Set-Variable -Name "baseUri" -Value "https://graph.microsoft.com/v1.0" -Scope "S
 $site = PromptFor-Site
 
 $script:itemCounter = 0 # For debugging
-
-enum ItemType
-{
-    File
-    Folder
-}
-
-$script:metaReport = New-MetaReport
+$script:metaReport = New-Object MetaReport
 
 $drives = Get-Drives $site
 Set-Variable -Name "driveLookup" -Value (Get-DriveLookup $drives) -Scope "Script" -Option "Constant"
 Export-ItemsInAllDrives -Drives $drives -ExportPath "$PSScriptRoot/SharePoint $($site.DisplayName) File Info $(New-TimeStamp).csv"
 
-Update-MetaReportWithDrives $drives
-Update-MetaReportWithSubsites (Get-Subsites $site)
-Update-MetaReportWithLists (Get-Lists $site)
-Update-MetaReportWithNotebooks (Get-Notebooks $site)
-Show-MetaReport
+$script:metaReport.AddDrives($drives)
+$script:metaReport.AddSubSites((Get-Subsites $site))
+$script:metaReport.AddLists((Get-Lists $site))
+$script:metaReport.AddNotebooks((Get-Notebooks $site))
+$script:metaReport.Show()
 
 Read-Host "Press Enter to exit"
