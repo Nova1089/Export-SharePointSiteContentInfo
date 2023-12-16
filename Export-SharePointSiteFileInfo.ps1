@@ -11,7 +11,7 @@ function Initialize-ColorScheme
 
 function Show-Introduction
 {
-    Write-Host "This script does some stuff..." -ForegroundColor $infoColor
+    Write-Host "This script exports info about the content on a SharePoint site and helps determine where space is being occupied." -ForegroundColor $infoColor
     Read-Host "Press Enter to continue"
 }
 
@@ -472,7 +472,15 @@ class MetaReport
 
     AddDrives($drives)
     {
-        $this.CountDrives += $drives.Count
+        if ($drives -is [HashTable])
+        {
+            $this.CountDrives++
+        }
+        else
+        {
+            $this.CountDrives += $drives.Count
+        }
+
         foreach ($drive in $drives)
         {
             $drive = [PSCustomObject]@{
@@ -488,7 +496,15 @@ class MetaReport
 
     AddLists($lists)
     {
-        $this.CountLists += $lists.Count
+        if ($lists -is [HashTable])
+        {
+            $this.CountLists++
+        }
+        else
+        {
+            $this.CountLists += $lists.Count
+        }
+
         foreach ($list in $lists)
         {
             $list = [PSCustomObject]@{
@@ -504,7 +520,15 @@ class MetaReport
 
     AddNotebooks($notebooks)
     {
-        $this.CountNotebooks += $notebooks.Count
+        if ($notebooks -is [HashTable])
+        {
+            $this.CountNotebooks++
+        }
+        else
+        {
+            $this.CountNotebooks += $notebooks.Count
+        }
+        
         foreach ($notebook in $notebooks)
         {
             $notebook = [PSCustomObject]@{
@@ -517,7 +541,15 @@ class MetaReport
 
     AddSubSites($subsites)
     {
-        $this.CountSubsites += $subsites.Count
+        if ($subsites -is [HashTable])
+        {
+            $this.CountSubsites++
+        }
+        else
+        {
+            $this.CountSubsites += $subsites.Count
+        }
+        
         foreach ($site in $subsites)
         {
             $site = [PSCustomObject]@{
@@ -578,18 +610,18 @@ enum ItemType
     Folder
 }
 
-# main
+main
 Initialize-ColorScheme
 Show-Introduction
 Use-Module "Microsoft.Graph.Authentication"
 TryConnect-MgGraph -Scopes "Sites.Read.All", "Notes.Read.All"
+
 Set-Variable -Name "getVersionInfo" -Value (Prompt-YesOrNo "Would you like to get file version info? (Takes much longer as it must enumerate each version.)") -Scope "Script" -Option "Constant"
 Set-Variable -Name "baseUri" -Value "https://graph.microsoft.com/v1.0" -Scope "Script" -Option "Constant"
-$site = PromptFor-Site
-
 $script:itemCounter = 0 # For debugging
 $script:metaReport = New-Object MetaReport
 
+$site = PromptFor-Site
 $drives = Get-Drives $site
 Set-Variable -Name "driveLookup" -Value (Get-DriveLookup $drives) -Scope "Script" -Option "Constant"
 Export-ItemsInAllDrives -Drives $drives -ExportPath "$PSScriptRoot/SharePoint $($site.DisplayName) File Info $(New-TimeStamp).csv"
