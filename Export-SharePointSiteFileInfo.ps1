@@ -126,14 +126,34 @@ function PromptFor-Site
     {
         $url = Read-Host "Enter site URL"
         $formattedUrl = Format-URL $url # Get the format needed for the API call.
+
+        if ($formattedUrl -inotmatch '.+\.sharepoint\.com:\/sites\/.+')
+        {
+            Write-Warning "Invalid site URL. Provide a URL in the format: domain.sharepoint.com/sites/siteName"
+            $keepGoing = $true
+            continue
+        }
+
         try
         {
-            # Uri is https://graph.microsoft.com/v1.0/sites/domain.sharepoint.com:/sites/siteName/?select=Id,DisplayName
-            $site = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$formattedUrl/?`$select=Id,DisplayName"            
+            # URI: https://graph.microsoft.com/v1.0/sites/domain.sharepoint.com:/sites/siteName
+            # Docs: https://learn.microsoft.com/en-us/graph/api/site-get
+            $uri = "$baseUri/sites/$formattedUrl/?`$select=Id,DisplayName"  
+            $site = Invoke-MgGraphRequest -Method "Get" -Uri $uri           
         }
         catch
         {
-            Write-Warning "There was an issue getting site. Please try again."
+            $errorRecord = $_
+            if ($errorRecord.Exception.Response.StatusCode -eq "Forbidden")
+            {
+                Write-Warning "Response: 403 Forbidden. You are not authorized to this site."
+            }
+            else
+            {
+                Write-Warning "There was an issue getting site. Please try again."
+                Write-Host "Call to URI: $uri" -ForegroundColor $warningColor
+                Write-Host $errorRecord.Exception.Message -ForegroundColor $warningColor
+            }            
             $keepGoing = $true
             continue
         }
@@ -157,7 +177,7 @@ function Format-URL($url)
 {
     $url = $url.Trim() # remove leading and trailing spaces
     $url = $url.Replace('https://', '') # remove https://
-    $url = $url.Replace('.com', '.com:') # add colon
+    $url = $url.Replace('.com/', '.com:/') # add colon
     return $url # result is domain.sharepoint.com:/sites/siteName
 }
 
@@ -165,16 +185,20 @@ function Get-Drives($site)
 {
     try
     {
-        $drives = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$($site.Id)/drives?`$select=Id,Name,DriveType,Quota,WebUrl"
-        $drives = $drives.Value
+        $uri = "$baseUri/sites/$($site.Id)/drives?`$select=Id,Name,DriveType,Quota,WebUrl"
+        $drives = Invoke-MgGraphRequest -Method "Get" -Uri $uri        
     }
     catch
     {
+        $errorRecord = $_
         Write-Host "There was an issue getting site drives. Exiting script." -ForegroundColor $failColor
+        Write-Host "Call to URI: $uri" -ForegroundColor $failColor
+        Write-Host $errorRecord.Exception.Message -ForegroundColor $failColor
         exit
     }
 
-    if ($null -eq $drives)
+    $drives = $drives.Value
+    if (($null -eq $drives) -or ($drives.Count -eq 0))
     {
         Write-Host "Was unable to find any drives in this site. Exiting script." -ForegroundColor $failColor
         exit
@@ -211,15 +235,14 @@ function Export-ItemsRecursively($uri, $exportPath)
 {
     if ($script:itemCounter -ge 100) { return } # For debugging
     
-    # Uri is $baseUri/drives/$($drive.Id)/items/root/children or $baseUri/drives/{drive-id}/items/{item-id}/children
+    # URI: $baseUri/drives/{drive-id}/items/root/children or $baseUri/drives/{drive-id}/items/{item-id}/children
+    # Docs: https://learn.microsoft.com/en-us/graph/api/driveitem-list-children
     $itemPage = Invoke-GraphRequest -Method "Get" -Uri $uri
     if ($itemPage.Value.Count -eq 0) { return }
 
     # For debugging
     if ($itemPage.Value.Count -ge 200)
     {
-        # This page has over 200 items: 
-        # https://blueravensolar.sharepoint.com/:f:/s/BusinessIntelligenceTeam/EoofhFpfjDdPh0Cl6OOp-1UB0N856UdcGFGelm2FbeN4gQ?e=JLGS69
         Write-Host "Over 200 items! Count is: $($itemPage.Value.Count)" -ForegroundColor "DarkMagenta"
         Write-Host "Starting with: $($itemPage.Value[0].Name)" -ForegroundColor "DarkMagenta"
     }
@@ -243,7 +266,8 @@ function Export-ItemsRecursively($uri, $exportPath)
             # String replace using regex.
             $uri = ($uri -Replace 'items\/.+\/children', "items/$($item.Id)/children")
 
-            # Uri is $baseUri/drives/$($drive.Id)/items/$($item.Id)/children
+            # URI: $baseUri/drives/{drive-id}/items/{item-id}/children
+            # Docs: https://learn.microsoft.com/en-us/graph/api/driveitem-list-children            
             Export-ItemsRecursively -Uri $uri -ExportPath $exportPath
         }
     }
@@ -282,8 +306,21 @@ function New-ItemRecord($item, $itemUri)
         $type = [ItemType]::File
         if ($script:getVersionInfo)
         {
-            # Uri is $baseUri/drives/$($drive.Id)/items/$($item.Id)/versions
-            $versions = Invoke-MgGraphRequest -Method "Get" -Uri "$itemUri/versions?`$select=size"
+            try
+            {
+                # URI: $baseUri/drives/{drive-id}/items/{item-id}/versions
+                # Docs: https://learn.microsoft.com/en-us/graph/api/driveitem-list-versions
+                $uri = "$itemUri/versions?`$select=size"
+                $versions = Invoke-MgGraphRequest -Method "Get" -Uri $uri
+            }
+            catch
+            {
+                $errorRecord = $_
+                Write-Warning "There was an issue getting versions for item: $($item.Name)."
+                Write-Host "Call to URI: $uri" -ForegroundColor $warningColor
+                Write-Host $errorRecord.Exception.Message -ForegroundColor $warningColor
+            }
+            
             $versions = $versions.Value
             $versionCount = $versions.Count
             $versionsTotalSizeInBytes = Get-VersionsTotalSize $versions
@@ -372,19 +409,55 @@ function Format-FileSize($sizeInBytes)
 
 function Get-Lists($site)
 {
-    $lists = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$($site.Id)/lists?`$select=Name,DisplayName,Description,WebUrl,List"
+    try
+    {
+        $uri = "$baseUri/sites/$($site.Id)/lists?`$select=Name,DisplayName,Description,WebUrl,List"
+        $lists = Invoke-MgGraphRequest -Method "Get" -Uri $uri
+    }
+    catch
+    {
+        $errorRecord = $_
+        Write-Warning "There was an issue getting lists."
+        Write-Host "Call to URI: $uri" -ForegroundColor $warningColor
+        Write-Host $errorRecord.Exception.Message -ForegroundColor $warningColor        
+    }
+    
     return $lists.Value
 }
 
 function Get-Notebooks($site)
 {
-    $notebooks = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$($site.Id)/onenote/notebooks?`$select=DisplayName,Links"
+    try
+    {
+        $uri = "$baseUri/sites/$($site.Id)/onenote/notebooks?`$select=DisplayName,Links"
+        $notebooks = Invoke-MgGraphRequest -Method "Get" -Uri $uri
+    }
+    catch
+    {
+        $errorRecord = $_
+        Write-Warning "There was an issue getting notebooks."
+        Write-Host "Call to URI: $uri" -ForegroundColor $warningColor
+        Write-Host $errorRecord.Exception.Message -ForegroundColor $warningColor
+    }
+    
     return $notebooks.Value
 }
 
 function Get-Subsites($site)
 {
-    $subsites = Invoke-MgGraphRequest -Method "Get" -Uri "$baseUri/sites/$($site.Id)/sites?`$select=Name,DisplayName,WebUrl"
+    try
+    {
+        $uri = "$baseUri/sites/$($site.Id)/sites?`$select=Name,DisplayName,WebUrl"
+        $subsites = Invoke-MgGraphRequest -Method "Get" -Uri $uri
+    }
+    catch
+    {
+        $errorRecord = $_
+        Write-Warning "There was an issue getting subsites."
+        Write-Host "Call to URI: $uri" -ForegroundColor $warningColor
+        Write-Host $errorRecord.Exception.Message -ForegroundColor $warningColor
+    }
+    
     return $subsites.Value
 }
 
@@ -610,7 +683,7 @@ enum ItemType
     Folder
 }
 
-main
+# main
 Initialize-ColorScheme
 Show-Introduction
 Use-Module "Microsoft.Graph.Authentication"
