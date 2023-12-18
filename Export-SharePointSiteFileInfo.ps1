@@ -125,7 +125,7 @@ function PromptFor-Site
     do
     {
         $url = Read-Host "Enter site URL"
-        $formattedUrl = Format-URL $url # Get the format needed for the API call.
+        $formattedUrl = Format-SiteUrl $url # Get the format needed for the API call.
 
         if ($formattedUrl -inotmatch '.+\.sharepoint\.com:\/sites\/.+')
         {
@@ -134,11 +134,11 @@ function PromptFor-Site
             continue
         }
 
+        # URI: https://graph.microsoft.com/v1.0/sites/domain.sharepoint.com:/sites/siteName
+        # Docs: https://learn.microsoft.com/en-us/graph/api/site-get
+        $uri = "$baseUri/sites/$formattedUrl/?`$select=Id,DisplayName"
         try
         {
-            # URI: https://graph.microsoft.com/v1.0/sites/domain.sharepoint.com:/sites/siteName
-            # Docs: https://learn.microsoft.com/en-us/graph/api/site-get
-            $uri = "$baseUri/sites/$formattedUrl/?`$select=Id,DisplayName"  
             $site = Invoke-MgGraphRequest -Method "Get" -Uri $uri           
         }
         catch
@@ -173,7 +173,7 @@ function PromptFor-Site
     return $site
 }
 
-function Format-URL($url)
+function Format-SiteUrl($url)
 {
     $url = $url.Trim() # remove leading and trailing spaces
     $url = $url.Replace('https://', '') # remove https://
@@ -183,9 +183,9 @@ function Format-URL($url)
 
 function Get-Drives($site)
 {
+    $uri = "$baseUri/sites/$($site.Id)/drives?`$select=Id,Name,DriveType,Quota,WebUrl"
     try
-    {
-        $uri = "$baseUri/sites/$($site.Id)/drives?`$select=Id,Name,DriveType,Quota,WebUrl"
+    {        
         $drives = Invoke-MgGraphRequest -Method "Get" -Uri $uri        
     }
     catch
@@ -255,7 +255,7 @@ function Export-ItemsRecursively($uri, $exportPath)
         {
             $itemUri = ($uri -Replace 'items\/.+\/children', "items/$($item.Id)")
         }
-        $itemRecord = New-ItemRecord -Item $item -ItemUri $itemUri        
+        $itemRecord = [ItemRecord]::New($item, $itemUri)
         $script:metaReport.AddItem($itemRecord)
         Write-Progress -Activity "Exporting items..." -Status "$($script:metaReport.CountItems): $($itemRecord.ParentPath)/$($itemRecord.Name)"
         $itemRecord | Export-CSV -Path $exportPath -Append -NoTypeInformation
@@ -287,63 +287,6 @@ function Test-ItemIsFolder($item)
 function Test-ItemIsFile($item)
 {
     return $item.ContainsKey("file")
-}
-
-function New-ItemRecord($item, $itemUri)
-{
-    $script:itemCounter++ # For debugging
-    
-    $isFolder = Test-ItemIsFolder $item
-    if ($isFolder)
-    {
-        $type = [ItemType]::Folder
-        $childCount = $item.Folder.ChildCount
-    }
-
-    $isFile = Test-ItemIsFile $item
-    if ($isFile)
-    {
-        $type = [ItemType]::File
-        if ($script:getVersionInfo)
-        {
-            try
-            {
-                # URI: $baseUri/drives/{drive-id}/items/{item-id}/versions
-                # Docs: https://learn.microsoft.com/en-us/graph/api/driveitem-list-versions
-                $uri = "$itemUri/versions?`$select=size"
-                $versions = Invoke-MgGraphRequest -Method "Get" -Uri $uri
-            }
-            catch
-            {
-                $errorRecord = $_
-                Write-Warning "There was an issue getting versions for item: $($item.Name)."
-                Write-Host "Call to URI: $uri" -ForegroundColor $warningColor
-                Write-Host $errorRecord.Exception.Message -ForegroundColor $warningColor
-            }
-            
-            $versions = $versions.Value
-            $versionCount = $versions.Count
-            $versionsTotalSizeInBytes = Get-VersionsTotalSize $versions
-            $versionsTotalSizeFormatted = Format-FileSize $versionsTotalSizeInBytes            
-        }
-    }
-
-    return [PSCustomObject]@{
-        ParentPath               = (Get-ReadablePath $item.ParentReference.Path)
-        Name                     = $item.Name        
-        Type                     = $type
-        ChildCount               = $childCount
-        Size                     = (Format-FileSize $item.Size)
-        SizeInBytes              = $item.Size
-        VersionCount             = $versionCount
-        VersionsTotalSize        = $versionsTotalSizeFormatted
-        VersionsTotalSizeInBytes = $versionsTotalSizeInBytes        
-        CreatedBy                = $item.CreatedBy.User.DisplayName
-        CreatedDateTime          = $item.CreatedDateTime
-        LastModifiedBy           = $item.LastModifiedBy.User.DisplayName
-        LastModifiedDateTime     = $item.LastModifiedDateTime
-        Url                      = $item.WebUrl
-    }
 }
 
 function Get-VersionsTotalSize($versions)
@@ -407,11 +350,16 @@ function Format-FileSize($sizeInBytes)
     return $formattedSize
 }
 
+function New-TimeStamp
+{
+    return (Get-Date -Format yyyy-MM-dd-hh-mmtt).ToString()
+}
+
 function Get-Lists($site)
 {
+    $uri = "$baseUri/sites/$($site.Id)/lists?`$select=Name,DisplayName,Description,WebUrl,List"
     try
-    {
-        $uri = "$baseUri/sites/$($site.Id)/lists?`$select=Name,DisplayName,Description,WebUrl,List"
+    {        
         $lists = Invoke-MgGraphRequest -Method "Get" -Uri $uri
     }
     catch
@@ -427,9 +375,9 @@ function Get-Lists($site)
 
 function Get-Notebooks($site)
 {
+    $uri = "$baseUri/sites/$($site.Id)/onenote/notebooks?`$select=DisplayName,Links"
     try
-    {
-        $uri = "$baseUri/sites/$($site.Id)/onenote/notebooks?`$select=DisplayName,Links"
+    {        
         $notebooks = Invoke-MgGraphRequest -Method "Get" -Uri $uri
     }
     catch
@@ -445,9 +393,9 @@ function Get-Notebooks($site)
 
 function Get-Subsites($site)
 {
+    $uri = "$baseUri/sites/$($site.Id)/sites?`$select=Name,DisplayName,WebUrl"
     try
-    {
-        $uri = "$baseUri/sites/$($site.Id)/sites?`$select=Name,DisplayName,WebUrl"
+    {        
         $subsites = Invoke-MgGraphRequest -Method "Get" -Uri $uri
     }
     catch
@@ -490,7 +438,6 @@ function Show-Separator($title, [ConsoleColor]$color = "DarkCyan", [switch]$noLi
     Write-Host $separator -ForegroundColor $color
 }
 
-
 function Get-Percent($divisor, $dividend)
 {
     $percent = $divisor / $dividend * 100
@@ -498,9 +445,73 @@ function Get-Percent($divisor, $dividend)
     return "$roundedToInt%"
 }
 
-function New-TimeStamp
+class ItemRecord
 {
-    return (Get-Date -Format yyyy-MM-dd-hh-mmtt).ToString()
+    $ParentPath
+    $Name
+    $Type
+    $ChildCount
+    $Size
+    $SizeInBytes
+    $VersionCount
+    $VersionsTotalSize
+    $VersionsTotalSizeInBytes
+    $CreatedBy
+    $CreatedDateTime
+    $LastModifiedBy
+    $LastModifiedDateTime
+    $Url
+
+    ItemRecord($item, $itemUri)
+    {
+        $script:itemCounter++ # For debugging
+    
+        $isFolder = Test-ItemIsFolder $item
+        if ($isFolder)
+        {
+            $this.Type = [ItemType]::Folder
+            $this.ChildCount = $item.Folder.ChildCount
+        }
+
+        $isFile = Test-ItemIsFile $item
+        if ($isFile)
+        {
+            $this.Type = [ItemType]::File
+            if ($script:getVersionInfo)
+            {
+                # URI: $baseUri/drives/{drive-id}/items/{item-id}/versions
+                # Docs: https://learn.microsoft.com/en-us/graph/api/driveitem-list-versions
+                $uri = "$itemUri/versions?`$select=size"
+                $versions = $null
+                try
+                {
+                    $versions = Invoke-MgGraphRequest -Method "Get" -Uri $uri
+                }
+                catch
+                {
+                    $errorRecord = $_
+                    Write-Warning "There was an issue getting versions for item: $($item.Name)."
+                    Write-Host "Call to URI: $uri" -ForegroundColor $script:warningColor
+                    Write-Host $errorRecord.Exception.Message -ForegroundColor $script:warningColor
+                }
+                
+                $versions = $versions.Value
+                $this.VersionCount = $versions.Count
+                $this.VersionsTotalSizeInBytes = Get-VersionsTotalSize $versions
+                $this.VersionsTotalSize = Format-FileSize $this.VersionsTotalSizeInBytes          
+            }
+        }
+
+        $this.ParentPath = (Get-ReadablePath $item.ParentReference.Path)
+        $this.Name = $item.Name
+        $this.Size = (Format-FileSize $item.Size)
+        $this.SizeInBytes = $item.Size
+        $this.CreatedBy = $item.CreatedBy.User.DisplayName
+        $this.CreatedDateTime = $item.CreatedDateTime
+        $this.LastModifiedBy = $item.LastModifiedBy.User.DisplayName
+        $this.LastModifiedDateTime = $item.LastModifiedDateTime
+        $this.Url = $item.WebUrl
+    }
 }
 
 class MetaReport
@@ -700,9 +711,9 @@ Set-Variable -Name "driveLookup" -Value (Get-DriveLookup $drives) -Scope "Script
 Export-ItemsInAllDrives -Drives $drives -ExportPath "$PSScriptRoot/SharePoint $($site.DisplayName) File Info $(New-TimeStamp).csv"
 
 $script:metaReport.AddDrives($drives)
-$script:metaReport.AddSubSites((Get-Subsites $site))
 $script:metaReport.AddLists((Get-Lists $site))
 $script:metaReport.AddNotebooks((Get-Notebooks $site))
+$script:metaReport.AddSubSites((Get-Subsites $site))
 $script:metaReport.Show()
 
 Read-Host "Press Enter to exit"
