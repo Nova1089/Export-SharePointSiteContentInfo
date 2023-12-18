@@ -233,7 +233,7 @@ function Export-ItemsInDrive($drive, $exportPath)
 
 function Export-ItemsRecursively($uri, $exportPath)
 {
-    if ($script:itemCounter -ge 100) { return } # For debugging
+    # if ($script:itemCounter -ge 650) { return } # For debugging
     
     # URI: $baseUri/drives/{drive-id}/items/root/children or $baseUri/drives/{drive-id}/items/{item-id}/children
     # Docs: https://learn.microsoft.com/en-us/graph/api/driveitem-list-children
@@ -249,7 +249,7 @@ function Export-ItemsRecursively($uri, $exportPath)
 
     foreach ($item in $itemPage.Value)
     {
-        if ($script:itemCounter -ge 100) { return } # For debugging
+        # if ($script:itemCounter -ge 650) { return } # For debugging
         
         if ($script:getVersionInfo)
         {
@@ -445,6 +445,56 @@ function Get-Percent($divisor, $dividend)
     return "$roundedToInt%"
 }
 
+function Get-ItemVersionsRecursively($itemUri, $versionList, $nextLink)
+{
+    if ($nextLink)
+    {
+        $uri = $nextLink
+    }
+    else
+    {
+        # URI: $baseUri/drives/{drive-id}/items/{item-id}/versions
+        # Docs: https://learn.microsoft.com/en-us/graph/api/driveitem-list-versions
+        $uri = "$itemUri/versions?`$select=size"
+    }
+    
+    try
+    {
+        $versionPage = Invoke-GraphRequest -Method "Get" -Uri $uri
+    }
+    catch
+    {
+        $errorRecord = $_
+        Write-Warning "There was an issue getting item versions."
+        Write-Host "Call to URI: $uri" -ForegroundColor $script:warningColor
+        Write-Host $errorRecord.Exception.Message -ForegroundColor $script:warningColor
+    }
+
+    $nextLink = $versionPage."@odata.nextLink"
+    if ($nextLink)
+    {
+        if ($null -eq $versionList)
+        { 
+            $versionList = New-Object System.Collections.Generic.List[object] 
+        }
+        $versionList = Get-ItemVersionsRecursively -NextLink $nextLink -VersionList $versionList
+    }
+    else
+    {
+        if ($null -eq $versionList)
+        {
+            return $versionPage.Value
+        }
+    }
+
+    foreach ($version in $versionPage.Value)
+    {
+        $versionList.Add($version)
+    }
+
+    return Write-Output $versionList -NoEnumerate
+}
+
 class ItemRecord
 {
     $ParentPath
@@ -479,23 +529,7 @@ class ItemRecord
             $this.Type = [ItemType]::File
             if ($script:getVersionInfo)
             {
-                # URI: $baseUri/drives/{drive-id}/items/{item-id}/versions
-                # Docs: https://learn.microsoft.com/en-us/graph/api/driveitem-list-versions
-                $uri = "$itemUri/versions?`$select=size"
-                $versions = $null
-                try
-                {
-                    $versions = Invoke-MgGraphRequest -Method "Get" -Uri $uri
-                }
-                catch
-                {
-                    $errorRecord = $_
-                    Write-Warning "There was an issue getting versions for item: $($item.Name)."
-                    Write-Host "Call to URI: $uri" -ForegroundColor $script:warningColor
-                    Write-Host $errorRecord.Exception.Message -ForegroundColor $script:warningColor
-                }
-                
-                $versions = $versions.Value
+                $versions = Get-ItemVersionsRecursively -ItemUri $itemUri
                 $this.VersionCount = $versions.Count
                 $this.VersionsTotalSizeInBytes = Get-VersionsTotalSize $versions
                 $this.VersionsTotalSize = Format-FileSize $this.VersionsTotalSizeInBytes          
