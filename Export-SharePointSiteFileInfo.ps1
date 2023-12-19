@@ -11,7 +11,8 @@ function Initialize-ColorScheme
 
 function Show-Introduction
 {
-    Write-Host "This script exports info about the content on a SharePoint site and helps determine where space is being occupied." -ForegroundColor $infoColor
+    Write-Host ("This script exports info about the content on a SharePoint site and helps determine where space is being occupied. `n" +
+                "Info is obtained for each file, folder, drive, list, notebook, and subsite.") -ForegroundColor $infoColor
     Read-Host "Press Enter to continue"
 }
 
@@ -232,25 +233,14 @@ function Export-ItemsInDrive($drive, $exportPath)
 }
 
 function Export-ItemsRecursively($uri, $exportPath)
-{
-    # if ($script:itemCounter -ge 650) { return } # For debugging
-    
+{   
     # URI: $baseUri/drives/{drive-id}/items/root/children or $baseUri/drives/{drive-id}/items/{item-id}/children
     # Docs: https://learn.microsoft.com/en-us/graph/api/driveitem-list-children
-    $itemPage = Invoke-GraphRequest -Method "Get" -Uri $uri
+    $itemPage = Invoke-MgGraphRequest -Method "Get" -Uri $uri
     if ($itemPage.Value.Count -eq 0) { return }
 
-    # For debugging
-    if ($itemPage.Value.Count -ge 200)
-    {
-        Write-Host "Over 200 items! Count is: $($itemPage.Value.Count)" -ForegroundColor "DarkMagenta"
-        Write-Host "Starting with: $($itemPage.Value[0].Name)" -ForegroundColor "DarkMagenta"
-    }
-
     foreach ($item in $itemPage.Value)
-    {
-        # if ($script:itemCounter -ge 650) { return } # For debugging
-        
+    {       
         if ($script:getVersionInfo)
         {
             $itemUri = ($uri -Replace 'items\/.+\/children', "items/$($item.Id)")
@@ -460,7 +450,7 @@ function Get-ItemVersionsRecursively($itemUri, $versionList, $nextLink)
     
     try
     {
-        $versionPage = Invoke-GraphRequest -Method "Get" -Uri $uri
+        $versionPage = Invoke-MgGraphRequest -Method "Get" -Uri $uri
     }
     catch
     {
@@ -513,9 +503,7 @@ class ItemRecord
     $Url
 
     ItemRecord($item, $itemUri)
-    {
-        $script:itemCounter++ # For debugging
-    
+    {   
         $isFolder = Test-ItemIsFolder $item
         if ($isFolder)
         {
@@ -733,11 +721,9 @@ Show-Introduction
 Use-Module "Microsoft.Graph.Authentication"
 TryConnect-MgGraph -Scopes "Sites.Read.All", "Notes.Read.All"
 
-Set-Variable -Name "getVersionInfo" -Value (Prompt-YesOrNo "Would you like to get file version info? (Takes much longer as it must enumerate each version.)") -Scope "Script" -Option "Constant"
+Set-Variable -Name "getVersionInfo" -Value (Prompt-YesOrNo "Would you like to get file version info? (Takes longer as script must total the versions.)") -Scope "Script" -Option "Constant"
 Set-Variable -Name "baseUri" -Value "https://graph.microsoft.com/v1.0" -Scope "Script" -Option "Constant"
-$script:itemCounter = 0 # For debugging
 $script:metaReport = New-Object MetaReport
-
 $site = PromptFor-Site
 $drives = Get-Drives $site
 Set-Variable -Name "driveLookup" -Value (Get-DriveLookup $drives) -Scope "Script" -Option "Constant"
