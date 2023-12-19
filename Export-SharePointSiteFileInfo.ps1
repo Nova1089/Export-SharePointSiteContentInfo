@@ -574,17 +574,16 @@ class MetaReport
     
     AddItem($itemRecord)
     {
-        $this.CountItems++
-        $this.StorageConsumedCurrentVersions += $itemRecord.SizeInBytes
+        $this.CountItems++        
         if ($itemRecord.Type -eq [ItemType]::File)
         {
             $this.CountFiles++
             $this.TotalStorageConsumed += $itemRecord.VersionsTotalSizeInBytes
+            $this.StorageConsumedCurrentVersions += $itemRecord.SizeInBytes
         }
         elseif ($itemRecord.Type -eq [ItemType]::Folder)
         {
             $this.CountFolders++
-            $this.TotalStorageConsumed += $itemRecord.SizeInBytes
         }
     }
 
